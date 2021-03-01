@@ -6,7 +6,6 @@ authors = ["Samuel Dudik <dudik@tutanota.com>"]
 edition = "2018"
 repository = "https://github.com/dudik/adblock-rust-server"
 license = "GPL-3.0"
-license-file = "LICENSE"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
