@@ -5,6 +5,7 @@ use std::io::BufReader;
 use std::sync::Arc;
 use std::fs;
 use std::env::var;
+use std::path::Path;
 
 use adblock::engine::Engine;
 use adblock::lists::{FilterFormat, FilterSet};
@@ -54,26 +55,38 @@ fn handle_client(mut stream: UnixStream, blocker: Arc<Engine>) {
 }
 
 fn main() -> std::io::Result<()> {
-    let mut rules = String::new();
     let home_dir = var("HOME").unwrap();
-    let lists_dir = home_dir.to_owned() + "/.config/ars/lists";
+    let config_dir = home_dir.to_owned() + "/.config/ars";
+    let lists_dir = config_dir.to_owned() + "/lists";
+    let engine_file = config_dir + "/engine";
 
-    for entry in fs::read_dir(lists_dir).unwrap() {
-        let entry = entry.unwrap();
-        let path = entry.path();
+    let mut blocker;
 
-        if path.is_file() {
-            let mut temp = String::new();
-            let mut file = fs::File::open(path).unwrap();
-            file.read_to_string(&mut temp).unwrap();
-            rules.push_str(&temp);
+    if Path::new(&engine_file).exists() {
+        blocker = Engine::new(true);
+        let data = fs::read(engine_file).unwrap();
+        blocker.deserialize(&data).unwrap();
+    } else {
+        let mut rules = String::new();
+
+        for entry in fs::read_dir(lists_dir).unwrap() {
+            let entry = entry.unwrap();
+            let path = entry.path();
+
+            if path.is_file() {
+                let mut temp = String::new();
+                let mut file = fs::File::open(path).unwrap();
+                file.read_to_string(&mut temp).unwrap();
+                rules.push_str(&temp);
+            }
         }
+
+        let mut filter_set = FilterSet::new(false);
+        filter_set.add_filter_list(&rules, FilterFormat::Standard);
+        blocker = Engine::from_filter_set(filter_set, true);
+        let data = blocker.serialize().unwrap();
+        fs::write(engine_file, data).unwrap();
     }
-
-    let mut filter_set = FilterSet::new(false);
-    filter_set.add_filter_list(&rules, FilterFormat::Standard);
-
-    let blocker = Arc::new(Engine::from_filter_set(filter_set, true));
 
     let socket_path = "/tmp/ars";
 
@@ -83,6 +96,8 @@ fn main() -> std::io::Result<()> {
 
     let listener = UnixListener::bind(socket_path).unwrap();
     println!("init-done");
+
+    let blocker = Arc::new(blocker);
 
     for stream in listener.incoming() {
         match stream {
