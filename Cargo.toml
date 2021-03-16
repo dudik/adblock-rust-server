@@ -1,7 +1,7 @@
 [package]
 name = "adblock-rust-server"
 description = "Server wrapper around the adblock crate using Unix domain sockets"
-version = "0.1.0"
+version = "0.2.0"
 authors = ["Samuel Dudik <dudik@tutanota.com>"]
 edition = "2018"
 repository = "https://github.com/dudik/adblock-rust-server"
