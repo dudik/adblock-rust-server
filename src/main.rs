@@ -88,10 +88,19 @@ fn main() -> std::io::Result<()> {
                 // list needs to be updated
                 updated = true;
                 let filename = url.split('/').last().unwrap();
-                let mut res = attohttpc::get(&url).send().unwrap();
-                let f = fs::File::create(lists_dir.to_owned() + "/" + filename).unwrap();
+                let res = attohttpc::get(&url).send().unwrap();
+                let mut f = fs::OpenOptions::new()
+                    .read(true)
+                    .write(true)
+                    .create(true)
+                    .open(lists_dir.to_owned() + "/" + filename)
+                    .unwrap();
 
-                let freader = BufReader::new(&mut res);
+                res.write_to(&f).unwrap();
+
+                f.seek(std::io::SeekFrom::Start(0)).unwrap();
+
+                let freader = BufReader::new(f);
                 for fline in freader.lines() {
                     let fline = fline.unwrap();
                     if fline.contains("! Expires: ") {
@@ -103,8 +112,6 @@ fn main() -> std::io::Result<()> {
                         break;
                     }
                 }
-
-                res.write_to(f).unwrap();
             } else {
                 out.push_str(&line);
             }
