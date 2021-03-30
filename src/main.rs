@@ -22,11 +22,11 @@ fn handle_client(mut stream: UnixStream, blocker: Arc<Engine>) {
 
         match parts.next().unwrap() {
             "n" => {
-                let source = parts.next().unwrap();
                 let req_url = parts.next().unwrap();
+                let source = parts.next().unwrap();
                 let req_type = parts.next().unwrap();
 
-                let result = blocker.check_network_urls(source, req_url, req_type);
+                let result = blocker.check_network_urls(req_url, source, req_type);
 
                 if result.matched == true { res.push('1') } else { res.push('0') };
             },
