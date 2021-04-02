@@ -57,17 +57,37 @@ fn handle_client(mut stream: UnixStream, blocker: Arc<Engine>) {
     }
 }
 
-fn main() -> std::io::Result<()> {
-    let home_dir = var("HOME").unwrap();
-    let config_dir = home_dir.to_owned() + "/.config/ars";
-    let lists_dir = config_dir.to_owned() + "/lists";
-    let engine_file = config_dir.to_owned() + "/engine";
-    let urls_file = config_dir.to_owned() + "/urls";
+fn update_list(url: &str, lists_dir: &str) -> String {
+    let filename = url.split('/').last().unwrap();
+    let res = attohttpc::get(&url).send().unwrap();
+    let mut f = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .open(lists_dir.to_owned() + "/" + filename)
+        .unwrap();
 
-    let mut updated = false;
-    let mut blocker;
+    res.write_to(&f).unwrap();
 
+    f.seek(std::io::SeekFrom::Start(0)).unwrap();
+
+    let freader = BufReader::new(f);
+    for fline in freader.lines() {
+        let fline = fline.unwrap();
+        if fline.contains("! Expires: ") {
+            let days = fline.split(' ').nth(2).unwrap().parse::<u64>().unwrap() * 24 * 3600;
+            let stamp = std::time::Duration::new(days, 0) + SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
+
+            return url.to_string() + " " + &stamp.as_secs().to_string();
+        }
+    }
+    
+    return url.to_string();
+}
+
+fn parse_urls(urls_file: &str, lists_dir: &str) -> bool {
     fs::create_dir_all(&lists_dir).unwrap();
+    let mut updated = false;
 
     if Path::new(&urls_file).exists() {
         let mut file = fs::OpenOptions::new()
@@ -87,31 +107,7 @@ fn main() -> std::io::Result<()> {
             if parts.clone().count() == 0 || parts.next().unwrap().parse::<u64>().unwrap() < timestamp.as_secs() {
                 // list needs to be updated
                 updated = true;
-                let filename = url.split('/').last().unwrap();
-                let res = attohttpc::get(&url).send().unwrap();
-                let mut f = fs::OpenOptions::new()
-                    .read(true)
-                    .write(true)
-                    .create(true)
-                    .open(lists_dir.to_owned() + "/" + filename)
-                    .unwrap();
-
-                res.write_to(&f).unwrap();
-
-                f.seek(std::io::SeekFrom::Start(0)).unwrap();
-
-                let freader = BufReader::new(f);
-                for fline in freader.lines() {
-                    let fline = fline.unwrap();
-                    if fline.contains("! Expires: ") {
-                        let days = fline.split(' ').nth(2).unwrap().parse::<u64>().unwrap() * 24 * 3600;
-                        let stamp = std::time::Duration::new(days, 0) + SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
-                        out.push_str(&url);
-                        out.push(' ');
-                        out.push_str(&stamp.as_secs().to_string());
-                        break;
-                    }
-                }
+                out.push_str(&update_list(&url, &lists_dir));
             } else {
                 out.push_str(&line);
             }
@@ -123,10 +119,15 @@ fn main() -> std::io::Result<()> {
         file.write_all(&out.into_bytes()).unwrap();
     }
 
+    return updated;
+}
+
+fn init_engine(engine_file: &str, lists_dir: &str, updated: bool) -> Engine {
     if Path::new(&engine_file).exists() && !updated {
-        blocker = Engine::new(true);
+        let mut blocker = Engine::new(true);
         let data = fs::read(engine_file).unwrap();
         blocker.deserialize(&data).unwrap();
+        return blocker;
     } else {
         let mut rules = String::new();
 
@@ -144,13 +145,14 @@ fn main() -> std::io::Result<()> {
 
         let mut filter_set = FilterSet::new(false);
         filter_set.add_filter_list(&rules, FilterFormat::Standard);
-        blocker = Engine::from_filter_set(filter_set, true);
+        let blocker = Engine::from_filter_set(filter_set, true);
         let data = blocker.serialize().unwrap();
         fs::write(engine_file, data).unwrap();
+        return blocker;
     }
+}
 
-    let socket_path = "/tmp/ars";
-
+fn start_server(socket_path: &str, blocker: Engine) {
     if std::path::Path::new(socket_path).exists() {
         fs::remove_file(socket_path).unwrap();
     }
@@ -171,6 +173,18 @@ fn main() -> std::io::Result<()> {
             }
         }
     }
+}
+
+fn main() -> std::io::Result<()> {
+    let home_dir = var("HOME").unwrap();
+    let config_dir = home_dir.to_owned() + "/.config/ars";
+    let lists_dir = config_dir.to_owned() + "/lists";
+    let engine_file = config_dir.to_owned() + "/engine";
+    let urls_file = config_dir.to_owned() + "/urls";
+
+    let updated = parse_urls(&urls_file, &lists_dir);
+    let blocker = init_engine(&engine_file, &lists_dir, updated);
+    start_server("/tmp/ars", blocker);
 
     Ok(())
 }
