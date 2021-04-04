@@ -14,23 +14,29 @@ use adblock::lists::{FilterFormat, FilterSet};
 use attohttpc;
 
 fn handle_client(mut stream: UnixStream, blocker: Arc<Engine>) {
-    let buf = BufReader::new(stream.try_clone().unwrap());
-    for line in buf.lines() {
-        let uline = line.unwrap();
-        let mut parts = uline.split(' ');
+    let reader = BufReader::new(stream.try_clone().unwrap());
+    for line in reader.lines() {
+        let line = line.unwrap();
+        let mut parts = line.split(' ');
         let mut res = String::new();
 
         match parts.next().unwrap() {
             "n" => {
+                // network request
                 let req_url = parts.next().unwrap();
                 let source = parts.next().unwrap();
                 let req_type = parts.next().unwrap();
 
                 let result = blocker.check_network_urls(req_url, source, req_type);
 
-                if result.matched == true { res.push('1') } else { res.push('0') };
+                if result.matched == true {
+                    res.push('1');
+                } else {
+                    res.push('0');
+                }
             },
             "c" => {
+                // cosmetic request
                 let url = parts.next().unwrap();
                 let resources = blocker.url_cosmetic_resources(url);
                 let ids : Vec<String> = parts.next().unwrap().split('\t').map(|x| x.to_string()).collect();
@@ -71,11 +77,11 @@ fn update_list(url: &str, lists_dir: &str) -> String {
 
     f.seek(std::io::SeekFrom::Start(0)).unwrap();
 
-    let freader = BufReader::new(f);
-    for fline in freader.lines() {
-        let fline = fline.unwrap();
-        if fline.contains("! Expires: ") {
-            let days = fline.split(' ').nth(2).unwrap().parse::<u64>().unwrap() * 24 * 3600;
+    let reader = BufReader::new(f);
+    for line in reader.lines() {
+        let line = line.unwrap();
+        if line.contains("! Expires: ") {
+            let days = line.split(' ').nth(2).unwrap().parse::<u64>().unwrap() * 24 * 3600;
             let stamp = std::time::Duration::new(days, 0) + SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
 
             return url.to_string() + " " + &stamp.as_secs().to_string();
@@ -125,15 +131,17 @@ fn parse_urls(urls_file: &str, lists_dir: &str) -> bool {
 fn init_engine(engine_file: &str, lists_dir: &str, updated: bool) -> Engine {
     if Path::new(&engine_file).exists() && !updated {
         let mut blocker = Engine::new(true);
-        let data = fs::read(engine_file).unwrap();
-        blocker.deserialize(&data).unwrap();
-        return blocker;
+        let data = fs::read(engine_file);
+        if data.is_ok() && blocker.deserialize(&data.unwrap()).is_ok() {
+            return blocker;
+        } else {
+            return init_engine(engine_file, lists_dir, true);
+        }
     } else {
         let mut rules = String::new();
 
-        for entry in fs::read_dir(lists_dir).unwrap() {
-            let entry = entry.unwrap();
-            let path = entry.path();
+        for entry in fs::read_dir(lists_dir).expect("Lists directory doesn't exist") {
+            let path = entry.unwrap().path();
 
             if path.is_file() {
                 let mut temp = String::new();
@@ -146,18 +154,22 @@ fn init_engine(engine_file: &str, lists_dir: &str, updated: bool) -> Engine {
         let mut filter_set = FilterSet::new(false);
         filter_set.add_filter_list(&rules, FilterFormat::Standard);
         let blocker = Engine::from_filter_set(filter_set, true);
-        let data = blocker.serialize().unwrap();
-        fs::write(engine_file, data).unwrap();
+
+        let data = blocker.serialize();
+        if data.is_ok() {
+            let _ = fs::write(engine_file, data.unwrap());
+        }
+
         return blocker;
     }
 }
 
 fn start_server(socket_path: &str, blocker: Engine) {
     if std::path::Path::new(socket_path).exists() {
-        fs::remove_file(socket_path).unwrap();
+        fs::remove_file(socket_path).expect("Can't remove Unix domain socket file");
     }
 
-    let listener = UnixListener::bind(socket_path).unwrap();
+    let listener = UnixListener::bind(socket_path).expect("Can't bind to socket");
     println!("init-done");
 
     let blocker = Arc::new(blocker);
@@ -175,8 +187,8 @@ fn start_server(socket_path: &str, blocker: Engine) {
     }
 }
 
-fn main() -> std::io::Result<()> {
-    let home_dir = var("HOME").unwrap();
+fn main() {
+    let home_dir = var("HOME").expect("Can't find environment variable $HOME");
     let config_dir = home_dir.to_owned() + "/.config/ars";
     let lists_dir = config_dir.to_owned() + "/lists";
     let engine_file = config_dir.to_owned() + "/engine";
@@ -185,6 +197,4 @@ fn main() -> std::io::Result<()> {
     let updated = parse_urls(&urls_file, &lists_dir);
     let blocker = init_engine(&engine_file, &lists_dir, updated);
     start_server("/tmp/ars", blocker);
-
-    Ok(())
 }
