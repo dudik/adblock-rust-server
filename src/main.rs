@@ -13,7 +13,13 @@ use adblock::lists::{FilterFormat, FilterSet};
 
 use attohttpc;
 
-fn handle_client(mut stream: UnixStream, blocker: Arc<Engine>) {
+enum InitType {
+    Default,
+    Reload,
+    Update
+}
+
+fn handle_client(mut stream: UnixStream, mut blocker: Arc<Engine>) {
     let reader = BufReader::new(stream.try_clone().unwrap());
     for line in reader.lines() {
         let line = line.unwrap();
@@ -54,6 +60,16 @@ fn handle_client(mut stream: UnixStream, blocker: Arc<Engine>) {
 
                 res.push_str(&style);
             },
+            "r" => {
+                // reload engine request
+                blocker = Arc::new(setup_blocker(InitType::Reload));
+                res.push('0');
+            },
+            "u" => {
+                // force update request
+                blocker = Arc::new(setup_blocker(InitType::Update));
+                res.push('0');
+            },
             _ => {
                 res.push_str("Unknown code supplied");
             }
@@ -87,11 +103,11 @@ fn update_list(url: &str, lists_dir: &str) -> String {
             return url.to_string() + " " + &stamp.as_secs().to_string();
         }
     }
-    
+
     return url.to_string();
 }
 
-fn parse_urls(urls_file: &str, lists_dir: &str) -> bool {
+fn parse_urls(urls_file: &str, lists_dir: &str, force_update: bool) -> bool {
     fs::create_dir_all(&lists_dir).unwrap();
     let mut updated = false;
 
@@ -110,7 +126,7 @@ fn parse_urls(urls_file: &str, lists_dir: &str) -> bool {
             let mut parts = line.split(' ');
             let url = parts.next().unwrap();
 
-            if parts.clone().count() == 0 || parts.next().unwrap().parse::<u64>().unwrap() < timestamp.as_secs() {
+            if !line.starts_with('#') && (force_update || parts.clone().count() == 0 || parts.next().unwrap().parse::<u64>().unwrap() < timestamp.as_secs()) {
                 // list needs to be updated
                 updated = true;
                 out.push_str(&update_list(&url, &lists_dir));
@@ -123,6 +139,9 @@ fn parse_urls(urls_file: &str, lists_dir: &str) -> bool {
 
         file.seek(std::io::SeekFrom::Start(0)).unwrap();
         file.write_all(&out.into_bytes()).unwrap();
+    } else {
+        let mut file = fs::File::create(urls_file).unwrap();
+        file.write(b"# Add your filter list urls here; lines starting with # will be ignored; timestamps right after urls determine the expiration time\n").unwrap();
     }
 
     return updated;
@@ -181,20 +200,49 @@ fn start_server(socket_path: &str, blocker: Engine) {
                 thread::spawn(move || handle_client(stream, blocker));
             }
             Err(err) => {
-                println!("Error: {}", err);
+                eprintln!("Error: {}", err);
             }
         }
     }
 }
 
-fn main() {
+fn setup_blocker(init_type: InitType) -> Engine {
     let home_dir = var("HOME").expect("Can't find environment variable $HOME");
     let config_dir = home_dir.to_owned() + "/.config/ars";
     let lists_dir = config_dir.to_owned() + "/lists";
     let engine_file = config_dir.to_owned() + "/engine";
     let urls_file = config_dir.to_owned() + "/urls";
+    let custom_filters_file = lists_dir.to_owned() + "/custom";
 
-    let updated = parse_urls(&urls_file, &lists_dir);
-    let blocker = init_engine(&engine_file, &lists_dir, updated);
+    let updated = match init_type {
+        InitType::Default => {
+            parse_urls(&urls_file, &lists_dir, false)
+        },
+        InitType::Reload => {
+            parse_urls(&urls_file, &lists_dir, false);
+            true
+        },
+        InitType::Update => {
+            parse_urls(&urls_file, &lists_dir, true)
+        }
+    };
+
+    let custom_file = fs::OpenOptions::new().write(true).create_new(true).open(&custom_filters_file);
+    match custom_file {
+        Ok(mut file) => {
+            file.write(b"# Add your custom network and cosmetic filters here, lines starting with # will be ignored\n").unwrap();
+        }
+        Err(err) => {
+            if err.kind() != std::io::ErrorKind::AlreadyExists {
+                eprintln!("Can't create custom filters file: {}", err);
+            }
+        }
+    }
+
+    return init_engine(&engine_file, &lists_dir, updated);
+}
+
+fn main() {
+    let blocker = setup_blocker(InitType::Default);
     start_server("/tmp/ars", blocker);
 }
