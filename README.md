@@ -26,3 +26,11 @@ For example:
 `c https://duckduckgo.com/ pg-index   wedonttrack content_homepage    logo_homepage_link`
 
 Returns a CSS rule that hides unwanted elements. `<ids>` and `<classes>` are lists of id/class names separated by the tab character `\t`.
+
+### Reload engine request
+`r`
+Restarts the adblock-rust engine applying any changes made to fiter lists or custom rules.
+
+### Force update request
+`u`
+Updates every filter list and restarts the engine.
